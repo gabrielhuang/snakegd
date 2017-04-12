@@ -1,0 +1,257 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torchvision import datasets, transforms
+from torch.autograd import Variable
+import argparse
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+# Training settings
+parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
+parser.add_argument('--batch-size', type=int, default=64, metavar='N',
+                    help='input batch size for training (default: 64)')
+parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
+                    help='input batch size for testing (default: 1000)')
+parser.add_argument('--epochs', type=int, default=10, metavar='N',
+                    help='number of epochs to train (default: 10)')
+parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
+                    help='learning rate (default: 0.01)')
+parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
+                    help='SGD momentum (default: 0.5)')
+parser.add_argument('--no-cuda', action='store_true', default=False,
+                    help='enables CUDA training')
+parser.add_argument('--seed', type=int, default=1, metavar='S',
+                    help='random seed (default: 1)')
+parser.add_argument('--log-interval', type=int, default=10, metavar='N',
+                                        help='how many batches to wait before logging training status')
+
+args = parser.parse_args()
+args.cuda = not args.no_cuda and torch.cuda.is_available()
+args.cuda = False
+args.epochs = 3
+
+#%%
+
+#%%
+kwargs = {}
+train_data = datasets.MNIST('../data', train=True, download=True,
+                   transform=transforms.Compose([
+                       transforms.ToTensor(),
+                       transforms.Normalize((0.1307,), (0.3081,))
+                   ]))
+train_loader = torch.utils.data.DataLoader(
+    train_data,
+    batch_size=args.batch_size, shuffle=False, **kwargs)
+test_loader = torch.utils.data.DataLoader(
+    datasets.MNIST('../data', train=False, transform=transforms.Compose([
+                       transforms.ToTensor(),
+                       transforms.Normalize((0.1307,), (0.3081,))
+                   ])),
+    batch_size=args.batch_size, shuffle=False, **kwargs)
+
+train_data_numpy = train_data.train_data.numpy()
+train_labels_numpy = train_data.train_labels.numpy()
+
+#%%
+class Net(nn.Module):
+    def __init__(self):
+        super(Net, self).__init__()
+        self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
+        self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
+        self.conv2_drop = nn.Dropout2d()
+        self.fc1 = nn.Linear(320, 50)
+        self.fc2 = nn.Linear(50, 10)
+
+    def forward(self, x):
+        x = F.relu(F.max_pool2d(self.conv1(x), 2))
+        x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
+        x = x.view(-1, 320)
+        x = F.relu(self.fc1(x))
+        x = F.dropout(x, training=self.training)
+        x = self.fc2(x)
+        return F.log_softmax(x)
+
+    def get_loss(self, output, target):
+        return F.nll_loss(output, target) 
+
+
+class LinearNet(nn.Module):
+    def __init__(self, l2reg):
+        super(LinearNet, self).__init__()
+        self.fc1 = nn.Linear(28*28, 10)
+        self.l2reg = l2reg
+        self.decay_params = list(self.parameters())[0]
+
+    def forward(self, x):
+        x = x.view(-1, 28*28)
+        x = self.fc1(x)
+        return F.log_softmax(x)
+    
+    def get_loss(self, output, target):
+        return F.nll_loss(output, target) + self.l2reg * torch.norm(self.decay_params)
+
+#%%
+def train(epoch):
+    model.train()
+    if not hasattr(model, 'train_losses'):
+        model.train_losses = []
+    for batch_idx, (data, target) in enumerate(train_loader):
+        if args.cuda:
+            data, target = data.cuda(), target.cuda()
+        data, target = Variable(data), Variable(target)
+        optimizer.zero_grad()
+        output = model(data)
+        loss = model.get_loss(output, target)
+        loss.backward()
+        model.train_losses += [loss.data.numpy()[0]]*train_loader.batch_size
+        optimizer.step()
+        if batch_idx % args.log_interval == 0:
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                epoch, batch_idx * len(data), len(train_loader.dataset),
+                100. * batch_idx / len(train_loader), loss.data[0]))
+
+def train_cheap_nus(epoch):
+    print 'THIS REQUIRES HAVING train_data'
+    model.train()
+    if not hasattr(model, 'train_losses'):
+        model.train_losses = []
+    new_priorities = False
+    if not hasattr(model, 'priorities'):
+        model.priorities = np.ones(len(train_data))
+        new_priorities = True
+    for i in xrange(len(train_data)):
+        priorities /= priorities.sum()
+        if new_priorities:
+            indices = np.random.randint(low=0, high=len(train_data), size=args.batch_size)
+        else:
+            indices = np.random.multinomial(20, priorities, size=args.batch_size)
+        
+        data = torch.Tensor(train_data_numpy[indices])
+        target = torch.Tensor(train_labels_numpy[indices])
+        
+        
+        if args.cuda:
+            data, target = data.cuda(), target.cuda()
+        data, target = Variable(data), Variable(target)
+        optimizer.zero_grad()
+        output = model(data)
+        loss = model.get_loss(output, target)
+        loss.backward()
+        model.train_losses += [loss.data.numpy()[0]]*train_loader.batch_size
+        optimizer.step()
+        if batch_idx % args.log_interval == 0:
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                epoch, batch_idx * len(data), len(train_loader.dataset),
+                100. * batch_idx / len(train_loader), loss.data[0]))
+
+def test(epoch):
+    model.eval()
+    if not hasattr(model, 'test_losses'):
+        model.test_losses = []
+    if not hasattr(model, 'test_acc'):
+        model.test_acc = []
+    test_loss = 0
+    correct = 0
+    for data, target in test_loader:
+        if args.cuda:
+            data, target = data.cuda(), target.cuda()
+        data, target = Variable(data, volatile=True), Variable(target)
+        output = model(data)
+        loss = model.get_loss(output, target).data[0]
+        test_loss += loss
+        model.test_losses += [loss]*test_loader.batch_size
+        pred = output.data.max(1)[1] # get the index of the max log-probability
+        n_correct = pred.eq(target.data).cpu().sum()
+        correct += n_correct
+        model.test_acc += [n_correct / float(test_loader.batch_size)]*test_loader.batch_size
+
+    test_loss = test_loss
+    test_loss /= len(test_loader) # loss function already averages over batch size
+    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
+        test_loss, correct, len(test_loader.dataset),
+        100. * correct / len(test_loader.dataset)))
+
+model_lin_sgd = LinearNet(l2reg=0.001)
+model_lin_adam = LinearNet(l2reg=0.001)
+model_cnn_sgd = Net()
+model_cnn_adam = Net()
+
+#%%
+#args.optimizer = 'adam'
+args.optimizer = 'sgd'
+args.architecture = 'cnn'
+#args.architecture = 'linear'
+
+model = None
+if args.optimizer == 'sgd':
+    if args.architecture == 'linear':
+        model = model_lin_sgd
+    elif args.architecture == 'cnn':
+        model = model_cnn_sgd
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+else:
+    if args.architecture == 'linear':
+        model = model_lin_adam
+    elif args.architecture == 'cnn':
+        model = model_cnn_adam  
+    optimizer = optim.Adam(model.parameters())    
+
+    
+print 'Selected', args.optimizer, args.architecture
+
+#%%
+for epoch in range(1, args.epochs + 1):
+    train(epoch)
+    test(epoch)
+#%%
+for epoch in range(1, args.epochs + 1):
+    train_cheap_nus(epoch)
+    
+    
+#%%
+plt.figure(1)
+p = list(model.fc1.parameters())
+templates = p[0].data.numpy()
+%matplotlib qt
+plt.imshow(templates.reshape((10*28, -1)), cmap='gray')
+plt.show()
+#%%
+%matplotlib qt
+plt.figure(2)
+plt.semilogy(np.arange(len(model.train_losses)), model.train_losses)
+plt.show()
+
+#%%
+%matplotlib qt
+
+def plot_smooth(losses, label, N=2000):
+    smooth_losses = np.convolve(losses, np.ones((N,))/N, mode='valid')
+    plt.semilogy(np.arange(len(smooth_losses)), smooth_losses, label=label)
+
+
+n = max(len(model.train_losses), len(model2.train_losses))
+plt.figure(3)
+plot_smooth(model_cnn_adam.train_losses, 'model_cnn_adam')
+plot_smooth(model_cnn_sgd.train_losses, 'model_cnn_sgd')
+
+#plot_smooth(model2.train_losses, 'model2')
+plt.legend()
+plt.show()
+
+#%%
+plt.figure(4)
+plot_smooth(model_cnn_adam.test_acc, 'model_cnn_adam')
+plt.show()
+
+#%%
+def get_param_size(model):
+    sizes = []
+    for p in model.parameters():
+        sizes.append(np.prod(p.size()))
+    return sizes
+
+sizes = get_param_size(model)
+print sizes, '-->', np.sum(sizes)

@@ -32,33 +32,38 @@ args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 args.cuda = False
 args.epochs = 3
-
-#%%
+args.log_interval=50
 
 #%%
 kwargs = {}
-train_data = datasets.MNIST('../data', train=True, download=True,
-                   transform=transforms.Compose([
+transform = transforms.Compose([
                        transforms.ToTensor(),
                        transforms.Normalize((0.1307,), (0.3081,))
-                   ]))
+                   ])
+
+train_data = datasets.MNIST('data', train=True, download=True,
+                   transform=transform)
+
 train_loader = torch.utils.data.DataLoader(
     train_data,
     batch_size=args.batch_size, shuffle=False, **kwargs)
+
+train_loader_all = torch.utils.data.DataLoader(
+    train_data,
+    batch_size=60000, shuffle=False, **kwargs)
+
 test_loader = torch.utils.data.DataLoader(
-    datasets.MNIST('../data', train=False, transform=transforms.Compose([
-                       transforms.ToTensor(),
-                       transforms.Normalize((0.1307,), (0.3081,))
-                   ])),
+    datasets.MNIST('data', train=False, transform=transform),
     batch_size=args.batch_size, shuffle=False, **kwargs)
 
-train_data_numpy = train_data.train_data.numpy()
-train_labels_numpy = train_data.train_labels.numpy()
+train_data_tensor, train_labels_tensor = iter(train_loader_all).next()
+train_data_numpy = train_data_tensor.numpy()
+train_labels_numpy = train_labels_tensor.numpy()
 
 #%%
-class Net(nn.Module):
+class CNNNet(nn.Module):
     def __init__(self):
-        super(Net, self).__init__()
+        super(CNNNet, self).__init__()
         self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
         self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
         self.conv2_drop = nn.Dropout2d()
@@ -94,44 +99,48 @@ class LinearNet(nn.Module):
         return F.nll_loss(output, target) + self.l2reg * torch.norm(self.decay_params)
 
 #%%
-def train(epoch):
+import utils
+reload(utils)
+from utils import TrainObserver, TestObserver
+            
+
+def train(epoch, observer=None):
+    if observer is None:
+        observer = TrainObserver()
+
     model.train()
-    if not hasattr(model, 'train_losses'):
-        model.train_losses = []
     for batch_idx, (data, target) in enumerate(train_loader):
         if args.cuda:
             data, target = data.cuda(), target.cuda()
         data, target = Variable(data), Variable(target)
+
         optimizer.zero_grad()
         output = model(data)
         loss = model.get_loss(output, target)
         loss.backward()
-        model.train_losses += [loss.data.numpy()[0]]*train_loader.batch_size
         optimizer.step()
+        
+        observer.update(epoch,
+                        batch_idx,
+                        len(train_loader),
+                        train_loader.batch_size, 
+                        loss.data.numpy()[0])
+        
         if batch_idx % args.log_interval == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.dataset),
-                100. * batch_idx / len(train_loader), loss.data[0]))
+            observer.print_report()
 
-def train_cheap_nus(epoch):
-    print 'THIS REQUIRES HAVING train_data'
+
+def train_nus(epoch, priorities=None):
     model.train()
     if not hasattr(model, 'train_losses'):
         model.train_losses = []
-    new_priorities = False
-    if not hasattr(model, 'priorities'):
-        model.priorities = np.ones(len(train_data))
-        new_priorities = True
-    for i in xrange(len(train_data)):
-        priorities /= priorities.sum()
-        if new_priorities:
-            indices = np.random.randint(low=0, high=len(train_data), size=args.batch_size)
-        else:
-            indices = np.random.multinomial(20, priorities, size=args.batch_size)
+    if priorities is None:
+        priorities = np.ones(len(train_data_numpy)) / len(train_data_numpy)
+    for batch_idx, __ in enumerate(train_loader):
+        indices = np.random.choice(len(train_data_numpy), p=priorities, size=args.batch_size)
         
-        data = torch.Tensor(train_data_numpy[indices])
+        data = torch.Tensor(train_data_numpy[indices].astype(float))
         target = torch.Tensor(train_labels_numpy[indices])
-        
         
         if args.cuda:
             data, target = data.cuda(), target.cuda()
@@ -147,37 +156,51 @@ def train_cheap_nus(epoch):
                 epoch, batch_idx * len(data), len(train_loader.dataset),
                 100. * batch_idx / len(train_loader), loss.data[0]))
 
-def test(epoch):
-    model.eval()
-    if not hasattr(model, 'test_losses'):
-        model.test_losses = []
-    if not hasattr(model, 'test_acc'):
-        model.test_acc = []
-    test_loss = 0
-    correct = 0
-    for data, target in test_loader:
+
+def test(epoch, observer=None): 
+    if observer is None:
+        observer = TestObserver()
+    observer.reset()  # recompute accuracy at each epoch
+        
+    model.eval()  # because of that, test loss may be smaller than train loss
+   
+    for batch_idx, (data, target) in enumerate(test_loader):
         if args.cuda:
             data, target = data.cuda(), target.cuda()
         data, target = Variable(data, volatile=True), Variable(target)
+        
         output = model(data)
         loss = model.get_loss(output, target).data[0]
-        test_loss += loss
-        model.test_losses += [loss]*test_loader.batch_size
         pred = output.data.max(1)[1] # get the index of the max log-probability
-        n_correct = pred.eq(target.data).cpu().sum()
-        correct += n_correct
-        model.test_acc += [n_correct / float(test_loader.batch_size)]*test_loader.batch_size
+        accuracy = pred.eq(target.data).cpu().sum() / float(test_loader.batch_size)
+        
+        observer.update(epoch,
+                        batch_idx,
+                        len(test_loader),
+                        test_loader.batch_size, 
+                        loss,
+                        accuracy)
+        
+        if batch_idx % args.log_interval == 0:
+            observer.print_report()
+    observer.print_report()
+#%%
+model = CNNNet()
+optimizer = optim.Adam(model.parameters())    
 
-    test_loss = test_loss
-    test_loss /= len(test_loader) # loss function already averages over batch size
-    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
-        test_loss, correct, len(test_loader.dataset),
-        100. * correct / len(test_loader.dataset)))
+#%%
 
+train_observer = TrainObserver()
+for epoch in range(1, args.epochs + 1):
+    train(epoch, train_observer)
+    test(epoch)
+    
+    
+#%%
 model_lin_sgd = LinearNet(l2reg=0.001)
 model_lin_adam = LinearNet(l2reg=0.001)
-model_cnn_sgd = Net()
-model_cnn_adam = Net()
+model_cnn_sgd = CNNNet()
+model_cnn_adam = CNNNet()
 
 #%%
 #args.optimizer = 'adam'
@@ -202,13 +225,10 @@ else:
     
 print 'Selected', args.optimizer, args.architecture
 
+
 #%%
 for epoch in range(1, args.epochs + 1):
-    train(epoch)
-    test(epoch)
-#%%
-for epoch in range(1, args.epochs + 1):
-    train_cheap_nus(epoch)
+    train_nus(epoch)
     
     
 #%%

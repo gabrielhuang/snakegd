@@ -29,7 +29,7 @@ parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                                         help='how many batches to wait before logging training status')
 
 args = parser.parse_args()
-args.cuda = not args.no_cuda and torch.cuda.is_available()
+#args.cuda = not args.no_cuda and torch.cuda.is_available()
 args.cuda = False
 args.epochs = 1
 args.log_interval=50
@@ -101,7 +101,7 @@ class LinearNet(nn.Module):
 #%%
 import utils
 reload(utils)
-from utils import TrainObserver, TestObserver
+from utils import TrainObserver, TestObserver, plot_smooth
             
 
 def train(epoch, observer=None):
@@ -208,8 +208,12 @@ for epoch in range(1, args.epochs + 1):
     test(epoch, nus_test_observer)
         
 #%%
-    
-    
+plt.figure(1)
+smooth_window = 40
+plot_smooth(train_observer.losses, 'Train losses', N=smooth_window)
+plot_smooth(nus_train_observer.losses, 'NUS Train losses', N=smooth_window)
+plt.legend()
+
 #%%
 model_lin_sgd = LinearNet(l2reg=0.001)
 model_lin_adam = LinearNet(l2reg=0.001)

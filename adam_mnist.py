@@ -31,7 +31,7 @@ parser.add_argument('--log-interval', type=int, default=10, metavar='N',
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 args.cuda = False
-args.epochs = 3
+args.epochs = 1
 args.log_interval=50
 
 #%%
@@ -130,32 +130,35 @@ def train(epoch, observer=None):
             observer.print_report()
 
 
-def train_nus(epoch, priorities=None):
+def train_nus(epoch, priorities=None, observer=None):
+    if observer is None:
+        observer = TrainObserver()
+
     model.train()
-    if not hasattr(model, 'train_losses'):
-        model.train_losses = []
-    if priorities is None:
-        priorities = np.ones(len(train_data_numpy)) / len(train_data_numpy)
-    for batch_idx, __ in enumerate(train_loader):
+    for batch_idx, (data, target) in enumerate(train_loader):
         indices = np.random.choice(len(train_data_numpy), p=priorities, size=args.batch_size)
-        
         data = torch.Tensor(train_data_numpy[indices].astype(float))
-        target = torch.Tensor(train_labels_numpy[indices])
+        target = torch.LongTensor(train_labels_numpy[indices])
         
         if args.cuda:
             data, target = data.cuda(), target.cuda()
         data, target = Variable(data), Variable(target)
+
         optimizer.zero_grad()
         output = model(data)
         loss = model.get_loss(output, target)
         loss.backward()
-        model.train_losses += [loss.data.numpy()[0]]*train_loader.batch_size
         optimizer.step()
+        
+        observer.update(epoch,
+                        batch_idx,
+                        len(train_loader),
+                        train_loader.batch_size, 
+                        loss.data.numpy()[0])
+        
         if batch_idx % args.log_interval == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.dataset),
-                100. * batch_idx / len(train_loader), loss.data[0]))
-
+            observer.print_report()
+        
 
 def test(epoch, observer=None): 
     if observer is None:
@@ -188,12 +191,23 @@ def test(epoch, observer=None):
 model = CNNNet()
 optimizer = optim.Adam(model.parameters())    
 
-#%%
-
+#%% Normal Train
 train_observer = TrainObserver()
+test_observer = TestObserver()
 for epoch in range(1, args.epochs + 1):
     train(epoch, train_observer)
-    test(epoch)
+    test(epoch, test_observer)
+    
+#%% NUS Train
+nus_train_observer = TrainObserver()
+nus_test_observer = TestObserver()
+priorities = np.ones(len(train_data_numpy))
+priorities /= priorities.sum()
+for epoch in range(1, args.epochs + 1):
+    train_nus(epoch, priorities, nus_train_observer)
+    test(epoch, nus_test_observer)
+        
+#%%
     
     
 #%%

@@ -1,4 +1,5 @@
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 class Smoother(object):
@@ -89,3 +90,8 @@ class TestObserver(object):
             print e
             print 'TestObserver --> call update() before print_report()'
             
+                                               
+def plot_smooth(losses, label, N=2000):
+    smooth_losses = np.convolve(losses, np.ones((N,))/N, mode='valid')
+    plt.semilogy(np.arange(len(smooth_losses)), smooth_losses, label=label)
+

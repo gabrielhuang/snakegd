@@ -41,8 +41,17 @@ transform = transforms.Compose([
                        transforms.Normalize((0.1307,), (0.3081,))
                    ])
 
+MAX_DATA = 6000
+
 train_data = datasets.MNIST('data', train=True, download=True,
                    transform=transform)
+
+if MAX_DATA is not None:
+    train_data.train_data = train_data.train_data[:MAX_DATA]
+    train_data.train_labels = train_data.train_labels[:MAX_DATA]
+    train_loader_all = torch.utils.data.DataLoader(
+        train_data,
+        batch_size=MAX_DATA, shuffle=False, **kwargs)    
 
 train_loader = torch.utils.data.DataLoader(
     train_data,
@@ -52,9 +61,7 @@ train_loader_stochastic = torch.utils.data.DataLoader(
     train_data,
     batch_size=1, shuffle=False, **kwargs)
 
-train_loader_all = torch.utils.data.DataLoader(
-    train_data,
-    batch_size=60000, shuffle=False, **kwargs)
+
 
 test_loader = torch.utils.data.DataLoader(
     datasets.MNIST('data', train=False, transform=transform),
@@ -203,9 +210,11 @@ def get_losses(epoch, observer=None):
 
 
 class TrainerNus(object):
-    def __init__(self, data, labels, observer=None):
+    def __init__(self, data, labels, observer=None, exploration=1e-5):
         '''
         Loader should be with batch_size 1
+        
+        exploration: probability of uniform distribution
         '''
         if observer is None:
             observer = TrainObserver()
@@ -215,6 +224,7 @@ class TrainerNus(object):
         self.data = data
         self.labels = labels
         self.variances = {}
+        self.exploration = exploration
         
     def train(self):     
         model.train()
@@ -230,7 +240,8 @@ class TrainerNus(object):
                 self.observer.print_report()
                 
     def train_batch(self):
-        priorities = self.priorities / self.priorities.sum()
+        priorities = self.actual_priorities = (self.exploration * np.ones_like(self.priorities) / len(self.priorities)
+            + (1-self.exploration) * self.priorities / self.priorities.sum())
         indices = np.random.choice(len(train_data_numpy), p=priorities, size=1)
         data = torch.Tensor(self.data[indices].astype(float))
         target = torch.LongTensor(self.labels[indices])
@@ -245,7 +256,7 @@ class TrainerNus(object):
         loss.backward()
         
         example_info = {
-                'step_size': 1.,
+                'grad_scale': 1. / (priorities[indices[0]] * len(priorities)),
                 'loss': loss.data.numpy()[0]}
         optimizer.step(example_info)
         
@@ -281,6 +292,7 @@ def get_entropy(p):
     return -pnz.dot(np.log(pnz))
 #%%
 model = CNNNet()
+#model = LinearNet()
 
 #%% Normal Train
 optimizer = optim.Adam(model.parameters())    
@@ -289,6 +301,20 @@ test_observer = TestObserver()
 for epoch in xrange(1, args.epochs + 1):
     train(epoch, train_observer)
     test(epoch, test_observer)
+    
+#%% Normal train using NUS-Train code
+import nus_adam
+reload(nus_adam)
+from nus_adam import NusAdam
+
+optimizer = NusAdam(model.parameters())
+train_observer = TrainObserver()
+test_observer = TestObserver()
+trainer_nus = TrainerNus(train_data_numpy, train_labels_numpy, train_observer)
+for epoch in xrange(1, args.epochs + 1):
+    trainer_nus.train()
+    test(epoch, test_observer)
+
     
 #%% NUS Train
 import nus_adam
@@ -299,7 +325,10 @@ optimizer = NusAdam(model.parameters())
 train_observer = TrainObserver()
 test_observer = TestObserver()
 #trainer_nus = TrainerNus(train_data_numpy, train_labels_numpy, train_observer)
-trainer_nus = LossTrainer(train_data_numpy, train_labels_numpy, train_observer)
+trainer_nus = LossTrainer(train_data_numpy, 
+                          train_labels_numpy, 
+                          observer=train_observer,
+                          exploration=0.1)
 for epoch in xrange(1, args.epochs + 1):
     trainer_nus.train()
     test(epoch, test_observer)

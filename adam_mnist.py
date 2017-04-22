@@ -322,16 +322,16 @@ reload(nus_adam)
 from nus_adam import NusAdam
 
 optimizer = NusAdam(model.parameters())
-train_observer = TrainObserver()
-test_observer = TestObserver()
-#trainer_nus = TrainerNus(train_data_numpy, train_labels_numpy, train_observer)
+train_observer2 = TrainObserver()
+test_observer2 = TestObserver()
+#trainer_nus = TrainerNus(train_data_numpy, train_labels_numpy, train_observer2)
 trainer_nus = LossTrainer(train_data_numpy, 
                           train_labels_numpy, 
-                          observer=train_observer,
-                          exploration=0.1)
+                          observer=train_observer2,
+                          exploration=0.9)
 for epoch in xrange(1, args.epochs + 1):
     trainer_nus.train()
-    test(epoch, test_observer)
+    test(epoch, test_observer2)
 
         
 #%%
@@ -353,9 +353,9 @@ torchvision.utils.save_image(torch.Tensor(sorted_data), 'per_loss.png')
 
 #%%
 plt.figure(1)
-smooth_window = 40
+smooth_window = 400
 plot_smooth(train_observer.losses, 'Train losses', N=smooth_window)
-plot_smooth(nus_train_observer.losses, 'NUS Train losses', N=smooth_window)
+plot_smooth(train_observer2.losses, 'NUS Train losses', N=smooth_window)
 plt.legend()
 
 #%%

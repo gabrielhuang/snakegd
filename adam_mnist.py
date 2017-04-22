@@ -11,7 +11,7 @@ import numpy as np
 
 # Training settings
 parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
-parser.add_argument('--batch-size', type=int, default=64, metavar='N',
+parser.add_argument('--batch-size', type=int, default=50, metavar='N',
                     help='input batch size for training (default: 64)')
 parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
                     help='input batch size for testing (default: 1000)')
@@ -31,7 +31,7 @@ parser.add_argument('--log-interval', type=int, default=10, metavar='N',
 args = parser.parse_args()
 #args.cuda = not args.no_cuda and torch.cuda.is_available()
 args.cuda = False
-args.epochs = 1
+args.epochs = 3
 args.log_interval=50
 
 #%%
@@ -47,6 +47,10 @@ train_data = datasets.MNIST('data', train=True, download=True,
 train_loader = torch.utils.data.DataLoader(
     train_data,
     batch_size=args.batch_size, shuffle=False, **kwargs)
+
+train_loader_stochastic = torch.utils.data.DataLoader(
+    train_data,
+    batch_size=1, shuffle=False, **kwargs)
 
 train_loader_all = torch.utils.data.DataLoader(
     train_data,
@@ -80,7 +84,11 @@ class CNNNet(nn.Module):
         return F.log_softmax(x)
 
     def get_loss(self, output, target):
-        return F.nll_loss(output, target) 
+        return F.nll_loss(output, target)
+    
+    def get_example_losses(self, output, target):
+        losses = [F.nll_loss(o, t) for o, t in zip(output, target)]
+        return losses
 
 
 class LinearNet(nn.Module):
@@ -130,36 +138,6 @@ def train(epoch, observer=None):
             observer.print_report()
 
 
-def train_nus(epoch, priorities=None, observer=None):
-    if observer is None:
-        observer = TrainObserver()
-
-    model.train()
-    for batch_idx, (data, target) in enumerate(train_loader):
-        indices = np.random.choice(len(train_data_numpy), p=priorities, size=args.batch_size)
-        data = torch.Tensor(train_data_numpy[indices].astype(float))
-        target = torch.LongTensor(train_labels_numpy[indices])
-        
-        if args.cuda:
-            data, target = data.cuda(), target.cuda()
-        data, target = Variable(data), Variable(target)
-
-        optimizer.zero_grad()
-        output = model(data)
-        loss = model.get_loss(output, target)
-        loss.backward()
-        optimizer.step()
-        
-        observer.update(epoch,
-                        batch_idx,
-                        len(train_loader),
-                        train_loader.batch_size, 
-                        loss.data.numpy()[0])
-        
-        if batch_idx % args.log_interval == 0:
-            observer.print_report()
-        
-
 def test(epoch, observer=None): 
     if observer is None:
         observer = TestObserver()
@@ -187,26 +165,163 @@ def test(epoch, observer=None):
         if batch_idx % args.log_interval == 0:
             observer.print_report()
     observer.print_report()
+    
+    
+def get_losses(epoch, observer=None):
+    if observer is None:
+        observer = TrainObserver()
+
+    losses = []
+    model.train()
+    for start_idx in xrange(0, len(train_data_numpy), args.batch_size):
+        indices = np.arange(start_idx, start_idx+args.batch_size)
+        data = torch.Tensor(train_data_numpy[indices].astype(float))
+        target = torch.LongTensor(train_labels_numpy[indices])
+        
+        if args.cuda:
+            data, target = data.cuda(), target.cuda()
+        data, target = Variable(data), Variable(target)
+
+        output = model(data)
+        loss = model.get_loss(output, target)
+
+        batch_losses = model.get_example_losses(output, target)
+        batch_losses = [b.data[0] for b in batch_losses]
+        losses += list(batch_losses)
+
+        batch_idx = start_idx / args.batch_size
+        observer.update(epoch,
+                        batch_idx,
+                        len(train_loader),
+                        train_loader.batch_size, 
+                        loss.data.numpy()[0])
+        
+        if batch_idx % args.log_interval == 0:
+            observer.print_report()
+            
+    return losses
+
+
+class TrainerNus(object):
+    def __init__(self, data, labels, observer=None):
+        '''
+        Loader should be with batch_size 1
+        '''
+        if observer is None:
+            observer = TrainObserver()
+            
+        self.priorities = np.ones(len(data))
+        self.observer = observer
+        self.data = data
+        self.labels = labels
+        self.variances = {}
+        
+    def train(self):     
+        model.train()
+        for batch_idx in xrange(len(self.data)):
+            loss = self.train_batch()
+            self.observer.update(epoch,
+                                    batch_idx,
+                                    len(self.data),
+                                    1, 
+                                    loss)
+                    
+            if batch_idx % 600 == 0:
+                self.observer.print_report()
+                
+    def train_batch(self):
+        priorities = self.priorities / self.priorities.sum()
+        indices = np.random.choice(len(train_data_numpy), p=priorities, size=1)
+        data = torch.Tensor(self.data[indices].astype(float))
+        target = torch.LongTensor(self.labels[indices])
+
+        if args.cuda:
+            data, target = data.cuda(), target.cuda()
+        data, target = Variable(data), Variable(target)
+
+        optimizer.zero_grad()
+        output = model(data)
+        loss = model.get_loss(output, target)
+        loss.backward()
+        
+        example_info = {
+                'step_size': 1.,
+                'loss': loss.data.numpy()[0]}
+        optimizer.step(example_info)
+        
+        self.update_priorities(indices[0], example_info)
+        
+        self.variances[indices[0]] = example_info['variation']
+        return loss.data.numpy()[0]
+    
+    def update_priorities(self, index, example_info):
+        pass
+    
+    
+class LossTrainer(TrainerNus):
+    def __init__(self, *args, **kwargs):
+        TrainerNus.__init__(self, *args, **kwargs)
+        self.visited = np.zeros_like(self.priorities)
+        self.scale = 10.
+        self.baseline = 1.
+        self.biased_priorities = np.ones_like(self.priorities) * self.baseline
+        self.inertia = 0.5
+        
+    def update_priorities(self, index, example_info):
+        #print index, example_info
+        new_priority = self.baseline + self.scale * example_info['loss']
+        self.biased_priorities[index] = (self.inertia*self.biased_priorities[index] 
+            + (1-self.inertia)*new_priority)
+        self.priorities[index] = self.biased_priorities[index] # no debiasing for now
+        self.visited[index] += 1.
+        
+    
+def get_entropy(p):
+    pnz = p[p>0.]
+    return -pnz.dot(np.log(pnz))
 #%%
 model = CNNNet()
-optimizer = optim.Adam(model.parameters())    
 
 #%% Normal Train
+optimizer = optim.Adam(model.parameters())    
 train_observer = TrainObserver()
 test_observer = TestObserver()
-for epoch in range(1, args.epochs + 1):
+for epoch in xrange(1, args.epochs + 1):
     train(epoch, train_observer)
     test(epoch, test_observer)
     
 #%% NUS Train
-nus_train_observer = TrainObserver()
-nus_test_observer = TestObserver()
-priorities = np.ones(len(train_data_numpy))
-priorities /= priorities.sum()
-for epoch in range(1, args.epochs + 1):
-    train_nus(epoch, priorities, nus_train_observer)
-    test(epoch, nus_test_observer)
+import nus_adam
+reload(nus_adam)
+from nus_adam import NusAdam
+
+optimizer = NusAdam(model.parameters())
+train_observer = TrainObserver()
+test_observer = TestObserver()
+#trainer_nus = TrainerNus(train_data_numpy, train_labels_numpy, train_observer)
+trainer_nus = LossTrainer(train_data_numpy, train_labels_numpy, train_observer)
+for epoch in xrange(1, args.epochs + 1):
+    trainer_nus.train()
+    test(epoch, test_observer)
+
         
+#%%
+optimizer = NusAdam(model.parameters())
+optimizer = NusAdam(model.parameters())
+train_observer = TrainObserver()
+test_observer = TestObserver()
+trainer_nus = TrainerNus(train_data_numpy, train_labels_numpy, train_observer)
+for epoch in xrange(1, args.epochs + 1):
+    trainer_nus.train()
+    test(epoch, test_observer)
+    
+    
+#%% Are losses correlated with sample difficulty?
+every = 1000
+sorted_losses, sorted_data = zip(*sorted(zip(losses[::every], train_data_numpy[::every])))
+sorted_data = np.asarray(sorted_data)
+torchvision.utils.save_image(torch.Tensor(sorted_data), 'per_loss.png')
+
 #%%
 plt.figure(1)
 smooth_window = 40

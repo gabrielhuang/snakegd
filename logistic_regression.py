@@ -24,7 +24,7 @@ parser.add_argument('--no-cuda', action='store_true', default=False,
 parser.add_argument('--seed', type=int, default=1, metavar='S',
                     help='random seed (default: 1)')
 parser.add_argument('--output-path', help='The path where to save the results.',
-                    type=str, default='results/')
+                    type=str, default='results/logistic_regression/')
 parser.add_argument('--opt', help='The optimizer to use.',
                     type=str, choices=('sgd', 'adam', 'momentum', 'eve'), default='sgd')
 args = parser.parse_args()
@@ -114,7 +114,7 @@ def test():
         correct += pred.eq(target.data).cpu().sum()
     return test_loss/len(test_loader)
 
-filename = os.path.join(args.output_path, 'logistic_'+args.opt+str(args.lr)+'.csv')
+filename = os.path.join(args.output_path, args.opt+'_'+str(args.lr)+'.csv')
 
 if not os.path.exists(args.output_path):
     os.makedirs(args.output_path)

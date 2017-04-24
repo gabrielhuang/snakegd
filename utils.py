@@ -91,7 +91,10 @@ class TestObserver(object):
             print 'TestObserver --> call update() before print_report()'
             
                                                
-def plot_smooth(losses, label, N=2000):
+def plot_smooth(losses, label, N=2000, semilog=True):
     smooth_losses = np.convolve(losses, np.ones((N,))/N, mode='valid')
-    plt.semilogy(np.arange(len(smooth_losses)), smooth_losses, label=label)
+    if semilog:
+        plt.semilogy(np.arange(len(smooth_losses)), smooth_losses, label=label)
+    else:
+        plt.plot(np.arange(len(smooth_losses)), smooth_losses, label=label)
 

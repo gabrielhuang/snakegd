@@ -319,8 +319,8 @@ optimizer = optim.Adam(model.parameters())
 train_observer = TrainObserver()
 test_observer = TestObserver()
 for epoch in xrange(1, args.epochs + 1):
-    train(epoch, train_observer)
-    test(epoch, test_observer)
+    train(model, epoch, train_observer)
+    test(model, epoch, test_observer)
     
 #%% Normal train using NUS-Train code
 import nus_adam

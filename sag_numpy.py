@@ -6,53 +6,48 @@ import matplotlib.pyplot as plt
 import numpy as np
 from utils import plot_smooth
 
-#%%
-batch_size = 64
 
-kwargs = {}
-transform = transforms.Compose([
-                       transforms.ToTensor(),
-                       transforms.Normalize((0.1307,), (0.3081,))
-                   ])
-
-MAX_DATA = 60000
-
-train_data = datasets.MNIST('data', train=True, download=True,
-                   transform=transform)
-
-if MAX_DATA is not None:
-    train_data.train_data = train_data.train_data[:MAX_DATA]
-    train_data.train_labels = train_data.train_labels[:MAX_DATA]
-    train_loader_all = torch.utils.data.DataLoader(
+def load_data():
+    batch_size = 64
+    
+    kwargs = {}
+    transform = transforms.Compose([
+                           transforms.ToTensor(),
+                           transforms.Normalize((0.1307,), (0.3081,))
+                       ])
+    
+    MAX_DATA = 60000
+    
+    train_data = datasets.MNIST('data', train=True, download=True,
+                       transform=transform)
+    
+    if MAX_DATA is not None:
+        train_data.train_data = train_data.train_data[:MAX_DATA]
+        train_data.train_labels = train_data.train_labels[:MAX_DATA]
+        train_loader_all = torch.utils.data.DataLoader(
+            train_data,
+            batch_size=MAX_DATA, shuffle=False, **kwargs)    
+    
+    train_loader = torch.utils.data.DataLoader(
         train_data,
-        batch_size=MAX_DATA, shuffle=False, **kwargs)    
+        batch_size=batch_size, shuffle=False, **kwargs)
+    
+    train_loader_stochastic = torch.utils.data.DataLoader(
+        train_data,
+        batch_size=1, shuffle=False, **kwargs)
+    
+    
+    
+    test_loader = torch.utils.data.DataLoader(
+        datasets.MNIST('data', train=False, transform=transform),
+        batch_size=batch_size, shuffle=False, **kwargs)
+    
+    train_data_tensor, train_labels_tensor = iter(train_loader_all).next()
+    train_data_numpy = train_data_tensor.numpy()
+    train_labels_numpy = train_labels_tensor.numpy()
+    
+    return train_data_numpy, train_labels_numpy
 
-train_loader = torch.utils.data.DataLoader(
-    train_data,
-    batch_size=batch_size, shuffle=False, **kwargs)
-
-train_loader_stochastic = torch.utils.data.DataLoader(
-    train_data,
-    batch_size=1, shuffle=False, **kwargs)
-
-
-
-test_loader = torch.utils.data.DataLoader(
-    datasets.MNIST('data', train=False, transform=transform),
-    batch_size=batch_size, shuffle=False, **kwargs)
-
-train_data_tensor, train_labels_tensor = iter(train_loader_all).next()
-train_data_numpy = train_data_tensor.numpy()
-train_labels_numpy = train_labels_tensor.numpy()
-
-#%%
-X = train_data_numpy.reshape((-1, 28*28))
-X = np.hstack((np.ones((len(X), 1)), X))
-Y = train_labels_numpy
-Y_dummy = np.zeros((len(Y), 10))
-Y_dummy[np.arange(len(Y)), Y] = 1.
-
-#%%
 
 def softmax(u):
     '''
@@ -90,14 +85,11 @@ class MultiLogistic(MultiLogisticWeightDecay):
     def __init__(self):
         MultiLogisticWeightDecay.__init__(self, 0.)
     
-#%% Parameters
-model = MultiLogistic()
-nepochs = 2
-weight_decay = 0.1
+
 
 # question: where to put weight decay?
 
-#%% SGD
+# SGD
 def sgd(X, Y_dummy, step_size, nepochs, weight_decay):
     losses = []
     w = np.zeros((X.shape[1], Y_dummy.shape[1]))
@@ -118,23 +110,21 @@ def sgd(X, Y_dummy, step_size, nepochs, weight_decay):
             losses.append(total_loss)
     
             if (i+1) % 10000 == 0:
-                print 'Epoch {}. {}/{} -- train loss {}'.format(t, i+1, len(X), np.mean(losses))
+                print 'SGD Epoch {}. {}/{} -- train loss {}'.format(t+1, i+1, len(X), np.mean(losses))
                 
     return w, losses
 
-step_size = 0.1
-w_sgd, losses_sgd = sgd(X, Y_dummy, step_size, nepochs, weight_decay)
-w = w_sgd
-losses = losses_sgd
 
-#%% SAGA
-def saga(X, Y_dummy, step_size, nepochs, weight_decay):
+
+# SAGA
+def saga(X, Y_dummy, step_size, nepochs, weight_decay, do_adam=False):
     losses = []
     w = np.zeros((X.shape[1], Y_dummy.shape[1]))
     np.random.seed(0)
 
     memories = np.zeros((X.shape[0], Y_dummy.shape[1]))
     sum_memories = np.zeros_like(w)
+    sum_sqr_memories = np.zeros_like(w)
     visited = np.zeros(X.shape[0])
 
     for t in xrange(nepochs):
@@ -153,22 +143,56 @@ def saga(X, Y_dummy, step_size, nepochs, weight_decay):
             sag_update = grad - old_grad + sum_memories / np.sum(visited)
             memories[i_t, :] = grad_scalar
             sum_memories = sum_memories + grad - old_grad
-            w = w - step_size * (sag_update + float(weight_decay)/w.size*w)
+            sum_sqr_memories = sum_sqr_memories + grad**2 - old_grad**2
+            total_update = (sag_update + float(weight_decay)/w.size*w)
+            if do_adam:
+                epsilon = 1e-5
+                total_update /= np.sqrt(sum_sqr_memories / np.sum(visited) + epsilon)
+            w = w - step_size * total_update
             total_loss = loss + 0.5*weight_decay*np.mean(w*w)
             
             # accumulate
             losses.append(total_loss)
     
             if (i+1) % 10000 == 0:
-                print 'Epoch {}. {}/{} -- train loss {}'.format(t, i+1, len(X), np.mean(losses))
+                print 'SAGA Epoch {}. {}/{} -- train loss {}'.format(t+1, i+1, len(X), np.mean(losses))
                 
     return w, losses
 
+
+
+#%% Load Data
+train_data_numpy, train_labels_numpy = load_data()
+
+X = train_data_numpy.reshape((-1, 28*28))
+X = np.hstack((np.ones((len(X), 1)), X))
+Y = train_labels_numpy
+Y_dummy = np.zeros((len(Y), 10))
+Y_dummy[np.arange(len(Y)), Y] = 1.
+
+#%% Parameters
+model = MultiLogistic()
+nepochs = 5
+weight_decay = 0.1
+
+
+#%% SGD
+step_size = 0.1
+w_sgd, losses_sgd = sgd(X, Y_dummy, step_size, nepochs, weight_decay)
+w = w_sgd
+losses = losses_sgd
+
+#%%
 step_size = 0.1
 w_saga, losses_saga = saga(X, Y_dummy, step_size, nepochs, weight_decay)
 w = w_saga
 losses = losses_saga
 
+#%%
+step_size = 0.01
+w_sagadam, losses_sagadam = saga(X, Y_dummy, step_size, nepochs, weight_decay, do_adam=True)
+w = w_sagadam
+losses = losses_sagadam
 #%% prediction
 Y_pred = np.argmax(X.dot(w), axis=1)
 accuracy = np.mean(Y_pred == Y)
@@ -179,8 +203,10 @@ print 'accuracy', accuracy
 plot_smooth(losses, 'train loss', N=1000)
 
 #%%
-plot_smooth(losses_sgd, 'SGD', N=1000)
-plot_smooth(losses_saga, 'SAGA', N=1000)
+N = 1000
+plot_smooth(losses_sgd, 'SGD', N)
+plot_smooth(losses_saga, 'SAGA', N)
+plot_smooth(losses_saga, 'SAGADAM', N)
 plt.legend()
 
 #%% did it learn?

@@ -207,7 +207,7 @@ skew = True
 X = train_data_numpy.reshape((len(train_data_numpy), -1))
 if skew:
     # multiply by random scale
-    scales = np.random.uniform(size=X.shape[1])
+    scales = np.random.uniform(size=X.shape[1]) ** 5
     X = X * scales[np.newaxis, :]
 X = np.hstack((np.ones((len(X), 1)), X))
 Y = train_labels_numpy
@@ -218,7 +218,7 @@ Y_dummy[np.arange(len(Y)), Y] = 1.
 
 #%% Parameters
 model = MultiLogistic()
-nepochs = 3
+nepochs = 5
 weight_decay = 0.01
 
 
@@ -272,7 +272,7 @@ print 'lowest loss', lowest_loss
 
 
 #%%
-N = 4000
+N = 40000
 semilog = False
 #%matplotlib qt
 plot_smooth(losses_sgd, 'SGD', N, semilog)

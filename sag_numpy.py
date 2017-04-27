@@ -289,12 +289,12 @@ params = {
 
 if dataset == 'mnist':
     params.update({
-        'smooth': 4000,
+        'smooth': 60000,
         'nepochs': 3,
         'sgd': 0.001,
         'adam': 0.0001,
-        'saga': 0.01,
-        'saga.adam': 0.001,
+        'saga': 0.001,
+        'saga.adam': 0.0001,
         'sagadam': 0.0005,
     })
 elif dataset == 'digits':
@@ -370,10 +370,14 @@ print 'lowest loss', lowest_loss
 
 #%%
 %matplotlib qt
+import utils
+reload(utils)
+from utils import plot_smooth
 
 # todo: also plot with almost no smoothing to show stability
 
-for i, semilog in enumerate((True, False)):
+#for i, semilog in enumerate((True, False)):
+for i, semilog in enumerate((False,)):
     plt.figure(1+i)
     N = params['smooth']
     plot_smooth(losses_sgd, 'SGD', N, semilog)

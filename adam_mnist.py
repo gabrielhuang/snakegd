@@ -7,6 +7,7 @@ from torch.autograd import Variable
 import argparse
 import matplotlib.pyplot as plt
 import numpy as np
+from utils import Smoother
 
 
 # Training settings
@@ -31,7 +32,7 @@ parser.add_argument('--log-interval', type=int, default=10, metavar='N',
 args = parser.parse_args()
 #args.cuda = not args.no_cuda and torch.cuda.is_available()
 args.cuda = False
-args.epochs = 3
+args.epochs = 10
 args.log_interval=50
 
 #%%
@@ -41,7 +42,7 @@ transform = transforms.Compose([
                        transforms.Normalize((0.1307,), (0.3081,))
                    ])
 
-MAX_DATA = 6000
+MAX_DATA = 600
 
 train_data = datasets.MNIST('data', train=True, download=True,
                    transform=transform)
@@ -119,7 +120,7 @@ reload(utils)
 from utils import TrainObserver, TestObserver, plot_smooth
             
 
-def train(epoch, observer=None):
+def train(model, epoch, observer=None):
     if observer is None:
         observer = TrainObserver()
 
@@ -145,7 +146,7 @@ def train(epoch, observer=None):
             observer.print_report()
 
 
-def test(epoch, observer=None): 
+def test(model, epoch, observer=None): 
     if observer is None:
         observer = TestObserver()
     observer.reset()  # recompute accuracy at each epoch
@@ -226,10 +227,10 @@ class TrainerNus(object):
         self.variances = {}
         self.exploration = exploration
         
-    def train(self):     
+    def train(self, model):     
         model.train()
         for batch_idx in xrange(len(self.data)):
-            loss = self.train_batch()
+            loss = self.train_batch(model)
             self.observer.update(epoch,
                                     batch_idx,
                                     len(self.data),
@@ -239,7 +240,7 @@ class TrainerNus(object):
             if batch_idx % 600 == 0:
                 self.observer.print_report()
                 
-    def train_batch(self):
+    def train_batch(self, model):
         priorities = self.actual_priorities = (self.exploration * np.ones_like(self.priorities) / len(self.priorities)
             + (1-self.exploration) * self.priorities / self.priorities.sum())
         indices = np.random.choice(len(train_data_numpy), p=priorities, size=1)
@@ -273,7 +274,7 @@ class LossTrainer(TrainerNus):
     def __init__(self, *args, **kwargs):
         TrainerNus.__init__(self, *args, **kwargs)
         self.visited = np.zeros_like(self.priorities)
-        self.scale = 10.
+        self.scale = 1.
         self.baseline = 1.
         self.biased_priorities = np.ones_like(self.priorities) * self.baseline
         self.inertia = 0.5
@@ -285,13 +286,32 @@ class LossTrainer(TrainerNus):
             + (1-self.inertia)*new_priority)
         self.priorities[index] = self.biased_priorities[index] # no debiasing for now
         self.visited[index] += 1.
-        
     
+    
+class GradVarTrainer(TrainerNus):
+    def __init__(self, *args, **kwargs):
+        TrainerNus.__init__(self, *args, **kwargs)
+        self.visited = np.zeros_like(self.priorities)
+        self.scale = 1.
+        self.baseline = 1.
+        self.biased_priorities = np.ones_like(self.priorities) * self.baseline
+        self.inertia = 0.5
+        
+    def update_priorities(self, index, example_info):
+        #print index, example_info
+        new_priority = self.baseline + self.scale * example_info['loss']
+        self.biased_priorities[index] = (self.inertia*self.biased_priorities[index] 
+            + (1-self.inertia)*new_priority)
+        self.priorities[index] = self.biased_priorities[index] # no debiasing for now
+        self.visited[index] += 1.
+            
 def get_entropy(p):
     pnz = p[p>0.]
     return -pnz.dot(np.log(pnz))
 #%%
 model = CNNNet()
+model2 = CNNNet()
+
 #model = LinearNet()
 
 #%% Normal Train
@@ -299,8 +319,8 @@ optimizer = optim.Adam(model.parameters())
 train_observer = TrainObserver()
 test_observer = TestObserver()
 for epoch in xrange(1, args.epochs + 1):
-    train(epoch, train_observer)
-    test(epoch, test_observer)
+    train(model, epoch, train_observer)
+    test(model, epoch, test_observer)
     
 #%% Normal train using NUS-Train code
 import nus_adam
@@ -308,12 +328,12 @@ reload(nus_adam)
 from nus_adam import NusAdam
 
 optimizer = NusAdam(model.parameters())
-train_observer = TrainObserver()
+train_observer = TrainObserver(Smoother(beta=0.99))
 test_observer = TestObserver()
 trainer_nus = TrainerNus(train_data_numpy, train_labels_numpy, train_observer)
 for epoch in xrange(1, args.epochs + 1):
-    trainer_nus.train()
-    test(epoch, test_observer)
+    trainer_nus.train(model)
+    test(model, epoch, test_observer)
 
     
 #%% NUS Train
@@ -321,19 +341,35 @@ import nus_adam
 reload(nus_adam)
 from nus_adam import NusAdam
 
-optimizer = NusAdam(model.parameters())
+optimizer = NusAdam(model2.parameters())
 train_observer2 = TrainObserver()
 test_observer2 = TestObserver()
 #trainer_nus = TrainerNus(train_data_numpy, train_labels_numpy, train_observer2)
 trainer_nus = LossTrainer(train_data_numpy, 
                           train_labels_numpy, 
                           observer=train_observer2,
-                          exploration=0.9)
+                          exploration=0.2)
 for epoch in xrange(1, args.epochs + 1):
-    trainer_nus.train()
-    test(epoch, test_observer2)
+    trainer_nus.train(model2)
+    test(model2, epoch, test_observer2)
 
-        
+#%%
+plt.figure(1)
+smooth_window = 400
+plot_smooth(train_observer.losses, 'Train losses', N=smooth_window)
+plot_smooth(train_observer2.losses, 'NUS Train losses', N=smooth_window)
+plt.legend()
+
+plt.figure(2)
+smooth_window = 10
+plot_smooth(test_observer.accuracies, 'Test Accuracies', N=smooth_window, semilog=False)
+plot_smooth(test_observer2.accuracies, 'NUS Test Accuracies', N=smooth_window, semilog=False)
+plt.legend()
+
+plt.figure(3)
+plt.hist(trainer_nus.priorities)
+plt.title('Priorities')
+
 #%%
 optimizer = NusAdam(model.parameters())
 optimizer = NusAdam(model.parameters())
@@ -351,9 +387,3 @@ sorted_losses, sorted_data = zip(*sorted(zip(losses[::every], train_data_numpy[:
 sorted_data = np.asarray(sorted_data)
 torchvision.utils.save_image(torch.Tensor(sorted_data), 'per_loss.png')
 
-#%%
-plt.figure(1)
-smooth_window = 400
-plot_smooth(train_observer.losses, 'Train losses', N=smooth_window)
-plot_smooth(train_observer2.losses, 'NUS Train losses', N=smooth_window)
-plt.legend()

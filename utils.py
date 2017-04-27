@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.signal import medfilt
 
 
 class Smoother(object):
@@ -90,11 +91,24 @@ class TestObserver(object):
             print e
             print 'TestObserver --> call update() before print_report()'
             
-                                               
-def plot_smooth(losses, label, N=2000, semilog=True):
-    smooth_losses = np.convolve(losses, np.ones((N,))/N, mode='valid')
+def smooth(x, N):
+    assert(N>=1)
+    int_x = np.cumsum(x)/float(N)
+    return int_x[N:] - int_x[:-N]
+    
+def plot_smooth(losses, label, N=2000, semilog=True, indices=None):
+    # make N odd
+    #N = 2*(N/2)+1
+    #smooth_losses = medfilt(losses, N)
+    #smooth_losses = np.convolve(losses, np.ones((N,))/N, mode='valid')
+    smooth_losses = smooth(losses, N)
+    if indices is None:
+        indices = np.arange(len(losses))
+    #indices = medfilt(losses, N)
+    #indices = np.convolve(indices, np.ones((N,))/N, mode='valid')
+    indices = smooth(indices, N)
     if semilog:
-        plt.semilogy(np.arange(len(smooth_losses)), smooth_losses, label=label)
+        plt.semilogy(indices, smooth_losses, label=label)
     else:
-        plt.plot(np.arange(len(smooth_losses)), smooth_losses, label=label)
+        plt.plot(indices, smooth_losses, label=label)
 

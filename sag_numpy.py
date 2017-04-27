@@ -242,13 +242,13 @@ def get_accuracy(w):
 
 def skew(X, power=5.):
     # multiply by random scale
-    scales = np.random.uniform(size=X.shape[1]) ** pow
+    scales = np.random.uniform(size=X.shape[1]) ** power
     X = X * scales[np.newaxis, :]
     return X
 
 #%% Load Data
 dataset = 'mnist'
-dataset = 'digits'
+#dataset = 'digits'
 do_skew = False
 
 if dataset == 'mnist':
@@ -290,21 +290,22 @@ params = {
 if dataset == 'mnist':
     params.update({
         'smooth': 4000,
-        'nepochs': 5,
+        'nepochs': 3,
         'sgd': 0.001,
         'adam': 0.0001,
-        'saga': 0.001,
-        'sagadam': 0.0001,
+        'saga': 0.01,
+        'saga.adam': 0.001,
+        'sagadam': 0.0005,
     })
 elif dataset == 'digits':
     params.update({
         'smooth': 4000,
         'nepochs': 40,
         'sgd': 0.05,
-        'adam': 0.005,
+        'adam': 0.001,
         'saga': 0.1,
         'saga.adam': 0.01,
-        'sagadam': 0.003,
+        'sagadam': 0.005,
     })
 else:
     raise Exception('Unknown dataset')
@@ -369,6 +370,8 @@ print 'lowest loss', lowest_loss
 
 #%%
 %matplotlib qt
+
+# todo: also plot with almost no smoothing to show stability
 
 for i, semilog in enumerate((True, False)):
     plt.figure(1+i)
